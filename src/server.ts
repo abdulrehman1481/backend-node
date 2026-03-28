@@ -1755,11 +1755,16 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   return res.status(500).json({ detail: "Internal server error" });
 });
 
-async function bootstrap() {
-  await prisma.$connect();
-  app.listen(PORT, () => {
-    console.log(`BDD Node backend listening on http://localhost:${PORT}`);
-  });
-}
+// Export app for Vercel serverless
+export default app;
 
-void bootstrap();
+// Only start server locally (not on Vercel)
+if (process.env.NODE_ENV !== "production") {
+  async function bootstrap() {
+    await prisma.$connect();
+    app.listen(PORT, () => {
+      console.log(`BDD Node backend listening on http://localhost:${PORT}`);
+    });
+  }
+  void bootstrap();
+}
