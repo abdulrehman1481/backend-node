@@ -1755,6 +1755,131 @@ app.get(
   })
 );
 
+// Get all unique cities with hospital count
+app.get("/api/hospitals/cities", asyncHandler(async (_req, res) => {
+  const cities = await prisma.medicalCenter.groupBy({
+    by: ["city"],
+    _count: {
+      id: true,
+    },
+    where: {
+      city: {
+        not: "",
+      },
+    },
+  });
+
+  const result = cities
+    .filter((c) => c.city && c.city.trim())
+    .map((c) => ({
+      city: c.city,
+      hospital_count: c._count.id,
+    }))
+    .sort((a, b) => a.city.localeCompare(b.city));
+
+  res.json({
+    count: result.length,
+    cities: result,
+  });
+}));
+
+// Get hospitals by city with optional filtering
+app.get(
+  "/api/hospitals/by-city/:city",
+  asyncHandler(async (req, res) => {
+    const { city } = req.params;
+    const { area, search } = req.query;
+
+    if (!city || typeof city !== "string") {
+      return res.status(400).json({ detail: "City parameter is required" });
+    }
+
+    const where: Prisma.MedicalCenterWhereInput = {
+      city: {
+        equals: city,
+        mode: "insensitive",
+      },
+    };
+
+    // Add area filter if provided
+    if (area && typeof area === "string") {
+      where.area = {
+        equals: area,
+        mode: "insensitive",
+      };
+    }
+
+    // Add search filter if provided
+    if (search && typeof search === "string") {
+      where.OR = [
+        { name: { contains: search, mode: "insensitive" } },
+        { area: { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    const hospitals = await prisma.medicalCenter.findMany({
+      where,
+      take: 100,
+    });
+
+    const items = hospitals.map((h) => ({
+      id: h.id.toString(),
+      name: h.name,
+      city: h.city,
+      area: h.area,
+      location: deserializeLocation(h.location),
+    }));
+
+    res.json({
+      city,
+      count: items.length,
+      hospitals: items,
+    });
+  })
+);
+
+// Get areas by city
+app.get(
+  "/api/hospitals/areas/:city",
+  asyncHandler(async (req, res) => {
+    const { city } = req.params;
+
+    if (!city || typeof city !== "string") {
+      return res.status(400).json({ detail: "City parameter is required" });
+    }
+
+    const areas = await prisma.medicalCenter.groupBy({
+      by: ["area"],
+      _count: {
+        id: true,
+      },
+      where: {
+        city: {
+          equals: city,
+          mode: "insensitive",
+        },
+        area: {
+          not: "",
+        },
+      },
+    });
+
+    const result = areas
+      .filter((a) => a.area && a.area.trim())
+      .map((a) => ({
+        area: a.area,
+        hospital_count: a._count.id,
+      }))
+      .sort((a, b) => a.area.localeCompare(b.area));
+
+    res.json({
+      city,
+      areas: result,
+      total_areas: result.length,
+    });
+  })
+);
+
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof z.ZodError) {
     return res.status(400).json(parseZodError(err));
