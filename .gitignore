@@ -5,3 +5,5 @@ node_modules
 .env.test
 .env.example
 /generated/prisma
+
+.vercel
