@@ -19,7 +19,17 @@ const ACCESS_EXPIRES = process.env.JWT_ACCESS_EXPIRES_IN || "15m";
 const REFRESH_EXPIRES = process.env.JWT_REFRESH_EXPIRES_IN || "30d";
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 
-app.use(cors({ origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN.split(",").map((v) => v.trim()) }));
+// Enhanced CORS configuration for Vercel
+const corsOptions = {
+  origin: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(express.json());
 app.use(morgan("dev"));
 app.set("json replacer", (_key: string, value: unknown) => (typeof value === "bigint" ? Number(value) : value));
