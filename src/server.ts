@@ -300,7 +300,10 @@ function auth(required = true) {
   return async (req: AuthedRequest, res: Response, next: NextFunction) => {
     const header = req.header("Authorization");
     if (!header) {
-      if (!required) return next();
+      if (!required) {
+        next();
+        return;
+      }
       res.status(401).json({ detail: "Authentication credentials were not provided." });
       return;
     }
@@ -318,7 +321,8 @@ function auth(required = true) {
         return;
       }
       req.user = { id: BigInt(decoded.sub), role: decoded.role };
-      return next();
+      next();
+      return;
     } catch {
       res.status(401).json({ detail: "Given token not valid for any token type." });
       return;
@@ -329,12 +333,14 @@ function auth(required = true) {
 function requireRole(...roles: UserRole[]) {
   return (req: AuthedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(401).json({ detail: "Authentication required." });
+      res.status(401).json({ detail: "Authentication required." });
+      return;
     }
     if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ detail: "You do not have permission to perform this action." });
+      res.status(403).json({ detail: "You do not have permission to perform this action." });
+      return;
     }
-    return next();
+    next();
   };
 }
 
@@ -1827,7 +1833,8 @@ app.get(
     const { area, search } = req.query;
 
     if (!city || typeof city !== "string") {
-      return res.status(400).json({ detail: "City parameter is required" });
+      res.status(400).json({ detail: "City parameter is required" });
+      return;
     }
 
     const where: Prisma.MedicalCenterWhereInput = {
@@ -1881,7 +1888,8 @@ app.get(
     const { city } = req.params;
 
     if (!city || typeof city !== "string") {
-      return res.status(400).json({ detail: "City parameter is required" });
+      res.status(400).json({ detail: "City parameter is required" });
+      return;
     }
 
     const areas = await prisma.medicalCenter.groupBy({
