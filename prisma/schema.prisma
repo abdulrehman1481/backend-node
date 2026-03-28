@@ -1,0 +1,178 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              BigInt    @id @default(autoincrement())
+  passwordHash    String    @map("password")
+  lastLogin       DateTime? @map("last_login")
+  isSuperuser     Boolean   @default(false) @map("is_superuser")
+  username        String    @unique
+  firstName       String    @default("") @map("first_name")
+  lastName        String    @default("") @map("last_name")
+  email           String    @unique
+  isStaff         Boolean   @default(false) @map("is_staff")
+  isActive        Boolean   @default(true) @map("is_active")
+  dateJoined      DateTime  @default(now()) @map("date_joined")
+  role            String
+  phoneNumber     String    @unique @map("phone_number")
+  isPhoneVerified Boolean   @default(false) @map("is_phone_verified")
+  isEmailVerified Boolean   @default(false) @map("is_email_verified")
+  isBanned        Boolean   @default(false) @map("is_banned")
+
+  donorProfile    DonorProfile?
+  hospitalProfile HospitalProfile?
+  createdRequests BloodRequest[]
+  requestActions  RequestAction[]
+  requestComments RequestComment[]
+
+  @@map("core_user")
+}
+
+model DonorProfile {
+  id                BigInt    @id @default(autoincrement())
+  userId            BigInt    @unique @map("user_id")
+  bloodGroup        String    @map("blood_group")
+  dateOfBirth       DateTime  @map("date_of_birth")
+  weightKg          Decimal   @map("weight_kg")
+  gender            String
+  isAvailable       Boolean   @default(true) @map("is_available")
+  lastDonationDate  DateTime? @map("last_donation_date")
+  location          Json
+  locationUpdatedAt DateTime  @updatedAt @map("location_updated_at")
+
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  commitments DonationCommitment[]
+  pingLogs    DonorPingLog[]
+
+  @@map("core_donorprofile")
+}
+
+model HospitalProfile {
+  id                BigInt   @id @default(autoincrement())
+  userId            BigInt   @unique @map("user_id")
+  facilityName      String   @map("facility_name")
+  licenseNumber     String   @unique @map("license_number")
+  isVerifiedByAdmin Boolean  @default(false) @map("is_verified_by_admin")
+  nodalOfficerName  String   @map("nodal_officer_name")
+  emergencyPhone    String   @map("emergency_phone")
+  location          Json
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("core_hospitalprofile")
+}
+
+model BloodRequest {
+  id                 BigInt   @id @default(autoincrement())
+  requesterId        BigInt   @map("requester_id")
+  patientName        String   @map("patient_name")
+  description        String   @default("")
+  patientAge         Int?     @map("patient_age")
+  bloodGroupNeeded   String   @map("blood_group_needed")
+  unitsRequired      Int      @default(1) @map("units_required")
+  unitsFulfilled     Int      @default(0) @map("units_fulfilled")
+  urgency            String
+  status             String   @default("ACTIVE")
+  requiredByDatetime DateTime @map("required_by_datetime")
+  hospitalName       String   @map("hospital_name")
+  location           Json
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  requester   User                 @relation(fields: [requesterId], references: [id], onDelete: Cascade)
+  commitments DonationCommitment[]
+  pingLogs    DonorPingLog[]
+  actions     RequestAction[]
+  comments    RequestComment[]
+
+  @@map("core_bloodrequest")
+}
+
+model DonationCommitment {
+  id             BigInt    @id @default(autoincrement())
+  bloodRequestId BigInt    @map("blood_request_id")
+  donorId        BigInt    @map("donor_id")
+  status         String    @default("ACCEPTED")
+  acceptedAt     DateTime  @default(now()) @map("accepted_at")
+  resolvedAt     DateTime? @map("resolved_at")
+
+  bloodRequest BloodRequest @relation(fields: [bloodRequestId], references: [id], onDelete: Cascade)
+  donor        DonorProfile @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  @@unique([bloodRequestId, donorId])
+  @@map("core_donationcommitment")
+}
+
+model DonorPingLog {
+  id             BigInt    @id @default(autoincrement())
+  bloodRequestId BigInt    @map("blood_request_id")
+  donorId        BigInt    @map("donor_id")
+  pingedAt       DateTime  @default(now()) @map("pinged_at")
+  didRespond     Boolean   @default(false) @map("did_respond")
+  responseStatus String    @default("PENDING") @map("response_status")
+  responseNote   String    @default("") @map("response_note")
+  respondedAt    DateTime? @map("responded_at")
+
+  bloodRequest BloodRequest @relation(fields: [bloodRequestId], references: [id], onDelete: Cascade)
+  donor        DonorProfile @relation(fields: [donorId], references: [id], onDelete: Cascade)
+
+  @@map("core_donorpinglog")
+}
+
+model RequestAction {
+  id             BigInt   @id @default(autoincrement())
+  bloodRequestId BigInt   @map("blood_request_id")
+  actorId        BigInt   @map("actor_id")
+  actionType     String   @map("action_type")
+  note           String   @default("")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  bloodRequest BloodRequest @relation(fields: [bloodRequestId], references: [id], onDelete: Cascade)
+  actor        User         @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@unique([bloodRequestId, actorId, actionType])
+  @@map("core_requestaction")
+}
+
+model RequestComment {
+  id             BigInt   @id @default(autoincrement())
+  bloodRequestId BigInt   @map("blood_request_id")
+  authorId       BigInt   @map("author_id")
+  message        String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  bloodRequest BloodRequest @relation(fields: [bloodRequestId], references: [id], onDelete: Cascade)
+  author       User         @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@map("core_requestcomment")
+}
+
+model MedicalCenter {
+  id           BigInt   @id @default(autoincrement())
+  name         String
+  city         String
+  area         String   @default("")
+  address      String   @default("")
+  contact      String   @default("")
+  doctorsCount Int?     @map("doctors_count")
+  centerType   String   @default("HOSPITAL") @map("center_type")
+  location     Json
+  source       String   @default("seed")
+  externalId   String?  @unique @map("external_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([city])
+  @@index([centerType])
+  @@map("core_medicalcenter")
+}
