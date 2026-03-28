@@ -21,11 +21,34 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 
 // Enhanced CORS configuration for Vercel
 const corsOptions = {
-  origin: true,
+  origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // If CORS_ORIGIN is "*", allow all origins
+    if (CORS_ORIGIN === "*") {
+      return callback(null, true);
+    }
+
+    // Split multiple origins by comma
+    const allowedOrigins = CORS_ORIGIN.split(",").map((o) => o.trim());
+
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // If no match, still allow (be permissive for development)
+    console.warn(`[CORS] Request from origin: ${origin}`);
+    return callback(null, true);
+  },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   credentials: true,
   optionsSuccessStatus: 200,
+  maxAge: 86400, // 24 hours
 };
 
 app.use(cors(corsOptions));
