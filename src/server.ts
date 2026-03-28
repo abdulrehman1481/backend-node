@@ -308,6 +308,22 @@ function asyncHandler(fn: (req: AuthedRequest, res: Response) => Promise<void>) 
   };
 }
 
+// Root route
+app.get("/", (_req, res) => {
+  res.json({
+    message: "BloodLink Backend API",
+    version: "1.0.0",
+    status: "running",
+    endpoints: {
+      health: "/api/health",
+      auth: "/api/auth",
+      donor: "/api/donor",
+      hospital: "/api/hospital",
+      requests: "/api/requests",
+    },
+  });
+});
+
 app.get("/api/health/", (_req, res) => {
   res.json({ status: "ok", service: "bdd-backend-node" });
 });
