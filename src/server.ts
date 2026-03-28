@@ -301,23 +301,27 @@ function auth(required = true) {
     const header = req.header("Authorization");
     if (!header) {
       if (!required) return next();
-      return res.status(401).json({ detail: "Authentication credentials were not provided." });
+      res.status(401).json({ detail: "Authentication credentials were not provided." });
+      return;
     }
 
     const token = header.startsWith("Bearer ") ? header.slice(7) : "";
     if (!token) {
-      return res.status(401).json({ detail: "Invalid authorization header." });
+      res.status(401).json({ detail: "Invalid authorization header." });
+      return;
     }
 
     try {
       const decoded = jwt.verify(token, ACCESS_SECRET) as JwtPayload & TokenPayload;
       if (decoded.type !== "access") {
-        return res.status(401).json({ detail: "Invalid token type." });
+        res.status(401).json({ detail: "Invalid token type." });
+        return;
       }
       req.user = { id: BigInt(decoded.sub), role: decoded.role };
       return next();
     } catch {
-      return res.status(401).json({ detail: "Given token not valid for any token type." });
+      res.status(401).json({ detail: "Given token not valid for any token type." });
+      return;
     }
   };
 }
