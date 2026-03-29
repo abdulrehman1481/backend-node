@@ -101,7 +101,7 @@ async function upsertWithRetry(data: {
   address: string;
   contact: string;
   doctorsCount: number | null;
-  location: { lat: number; lng: number };
+  location: { lat: number; lng: number } | Record<string, never>;
   externalId: string;
 }) {
   const maxAttempts = 3;
@@ -209,14 +209,25 @@ async function seedHospitals() {
           continue;
         }
 
-        // Default location (Pakistan center)
-        const latitude = parseFloat(hospital.latitude || "") || 24.8607;
-        const longitude = parseFloat(hospital.longitude || "") || 67.0011;
-        
-        const location = {
-          lat: latitude,
-          lng: longitude,
-        };
+        const latitude = Number.parseFloat(hospital.latitude || "");
+        const longitude = Number.parseFloat(hospital.longitude || "");
+
+        // Do not assign fake fallback coordinates; keep location empty if source has no valid lat/lng.
+        const hasValidCoordinates =
+          Number.isFinite(latitude) &&
+          Number.isFinite(longitude) &&
+          latitude >= -90 &&
+          latitude <= 90 &&
+          longitude >= -180 &&
+          longitude <= 180 &&
+          !(latitude === 0 && longitude === 0);
+
+        const location: { lat: number; lng: number } | Record<string, never> = hasValidCoordinates
+          ? {
+              lat: latitude,
+              lng: longitude,
+            }
+          : ({} as Record<string, never>);
 
         const city = normalizeText(hospital.city || hospital.district || "") || "Unknown";
         const area = normalizeText(hospital.area || hospital.tehsil || "");

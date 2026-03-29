@@ -307,9 +307,13 @@ function requestWithActionCount(item: Prisma.BloodRequestGetPayload<{ include: {
   };
 }
 
-async function inferCityFromLocation(lat: number, lng: number, centerType?: string): Promise<string | null> {
+async function inferCityFromLocation(
+  lat: number,
+  lng: number,
+  centerType?: string
+): Promise<{ city: string | null; distanceKm: number | null }> {
   if (!isValidNonZeroLocation(lat, lng)) {
-    return null;
+    return { city: null, distanceKm: null };
   }
 
   const where: Prisma.MedicalCenterWhereInput = { city: { not: "" } };
@@ -332,15 +336,80 @@ async function inferCityFromLocation(lat: number, lng: number, centerType?: stri
   for (const center of centers) {
     const loc = parseLatLng(center.location);
     if (!isValidNonZeroLocation(loc.lat, loc.lng)) continue;
+    const centerLat = Number(loc.lat);
+    const centerLng = Number(loc.lng);
 
-    const d = distanceKm(lat, lng, loc.lat, loc.lng);
+    const d = distanceKm(lat, lng, centerLat, centerLng);
     if (bestDistance === null || d < bestDistance) {
       bestDistance = d;
       bestCity = center.city;
     }
   }
 
-  return bestCity;
+  return { city: bestCity, distanceKm: bestDistance };
+}
+
+async function reverseGeocodeCity(lat: number, lng: number): Promise<string | null> {
+  if (!isValidNonZeroLocation(lat, lng)) {
+    return null;
+  }
+
+  const timeout = Number(process.env.REVERSE_GEOCODE_TIMEOUT_MS || 1500);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const url = new URL("https://nominatim.openstreetmap.org/reverse");
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("lat", String(lat));
+    url.searchParams.set("lon", String(lng));
+    url.searchParams.set("zoom", "10");
+    url.searchParams.set("addressdetails", "1");
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        "User-Agent": "BloodLink/1.0 (city-inference)",
+        "Accept": "application/json",
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as {
+      address?: {
+        city?: string;
+        town?: string;
+        village?: string;
+        county?: string;
+        municipality?: string;
+        state_district?: string;
+      };
+    };
+
+    const address = payload.address;
+    if (!address) {
+      return null;
+    }
+
+    const city =
+      address.city ||
+      address.town ||
+      address.village ||
+      address.county ||
+      address.municipality ||
+      address.state_district ||
+      null;
+
+    return city ? city.trim() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function auth(required = true) {
@@ -917,10 +986,14 @@ app.get(
       }
 
       if (isValidNonZeroLocation(donorLoc.lat, donorLoc.lng)) {
+        const donorLat = Number(donorLoc.lat);
+        const donorLng = Number(donorLoc.lng);
         for (const item of activeRequests) {
           const reqLoc = parseLatLng(item.location);
           if (!isValidNonZeroLocation(reqLoc.lat, reqLoc.lng)) continue;
-          if (distanceKm(donorLoc.lat, donorLoc.lng, reqLoc.lat, reqLoc.lng) <= cityRadiusKm) {
+          const reqLat = Number(reqLoc.lat);
+          const reqLng = Number(reqLoc.lng);
+          if (distanceKm(donorLat, donorLng, reqLat, reqLng) <= cityRadiusKm) {
             nearbyIds.add(item.id);
           }
         }
@@ -1307,8 +1380,8 @@ app.get(
       if (!isValidNonZeroLocation(loc.lat, loc.lng)) {
         return void res.status(400).json({ detail: "Hospital profile location must have valid non-zero lat/lng." });
       }
-      lat = loc.lat;
-      lon = loc.lng;
+      lat = Number(loc.lat);
+      lon = Number(loc.lng);
     }
 
     if (!isValidNonZeroLocation(lat, lon)) {
@@ -1328,11 +1401,13 @@ app.get(
       .map((donor) => {
         const loc = parseLatLng(donor.location);
         if (!isValidNonZeroLocation(loc.lat, loc.lng)) return null;
+        const donorLat = Number(loc.lat);
+        const donorLng = Number(loc.lng);
 
         const eligible = isEligibleToDonate(donor.isAvailable, donor.weightKg, donor.lastDonationDate);
         if (!eligible) return null;
 
-        const d = distanceKm(lat, lon, loc.lat, loc.lng);
+        const d = distanceKm(lat, lon, donorLat, donorLng);
         if (d > radiusKm) return null;
 
         const display = `${donor.user.firstName} ${donor.user.lastName}`.trim() || donor.user.firstName || donor.user.email.split("@")[0];
@@ -1647,9 +1722,11 @@ app.get(
     if (!donor) return void res.status(400).json({ detail: "Donor profile not found. Complete your profile first." });
 
     const donorLoc = parseLatLng(donor.location);
-    if (donorLoc.lat === null || donorLoc.lng === null) {
-      return void res.status(400).json({ detail: "Donor location must include valid lat/lng." });
+    if (!isValidNonZeroLocation(donorLoc.lat, donorLoc.lng)) {
+      return void res.status(400).json({ detail: "Donor location must include valid non-zero lat/lng." });
     }
+    const donorLat = Number(donorLoc.lat);
+    const donorLng = Number(donorLoc.lng);
 
     const open = await prisma.bloodRequest.findMany({
       where: { status: { in: ["ACTIVE", "PARTIAL"] }, requiredByDatetime: { gte: new Date() } },
@@ -1658,8 +1735,10 @@ app.get(
 
     const matched = open.filter((item) => {
       const loc = parseLatLng(item.location);
-      if (loc.lat === null || loc.lng === null) return false;
-      return distanceKm(donorLoc.lat!, donorLoc.lng!, loc.lat, loc.lng) <= radiusKm;
+      if (!isValidNonZeroLocation(loc.lat, loc.lng)) return false;
+      const reqLat = Number(loc.lat);
+      const reqLng = Number(loc.lng);
+      return distanceKm(donorLat, donorLng, reqLat, reqLng) <= radiusKm;
     });
 
     matched.sort((a, b) => {
@@ -1706,9 +1785,11 @@ app.get(
     if (!donor) return void res.status(400).json({ detail: "Donor profile not found. Complete your profile first." });
 
     const donorLoc = parseLatLng(donor.location);
-    if (donorLoc.lat === null || donorLoc.lng === null) {
-      return void res.status(400).json({ detail: "Donor location must include valid lat/lng." });
+    if (!isValidNonZeroLocation(donorLoc.lat, donorLoc.lng)) {
+      return void res.status(400).json({ detail: "Donor location must include valid non-zero lat/lng." });
     }
+    const donorLat = Number(donorLoc.lat);
+    const donorLng = Number(donorLoc.lng);
 
     const open = await prisma.bloodRequest.findMany({
       where: { status: { in: ["ACTIVE", "PARTIAL"] }, requiredByDatetime: { gte: new Date() } },
@@ -1717,8 +1798,10 @@ app.get(
     let nearbyOpen = 0;
     for (const item of open) {
       const loc = parseLatLng(item.location);
-      if (loc.lat === null || loc.lng === null) continue;
-      if (distanceKm(donorLoc.lat, donorLoc.lng, loc.lat, loc.lng) <= radiusKm) nearbyOpen += 1;
+      if (!isValidNonZeroLocation(loc.lat, loc.lng)) continue;
+      const reqLat = Number(loc.lat);
+      const reqLng = Number(loc.lng);
+      if (distanceKm(donorLat, donorLng, reqLat, reqLng) <= radiusKm) nearbyOpen += 1;
     }
 
     const commitments = await prisma.donationCommitment.findMany({
@@ -1825,6 +1908,7 @@ app.get(
 
     let city = cityQuery;
     let inferredCity = false;
+    const maxReliableInferenceKm = Number(process.env.CITY_INFERENCE_MAX_DISTANCE_KM || 120);
 
     if (!city) {
       let locationLat = Number.isFinite(userLat) ? userLat : null;
@@ -1845,8 +1929,24 @@ app.get(
       }
 
       if (isValidNonZeroLocation(locationLat, locationLng)) {
-        city = (await inferCityFromLocation(locationLat, locationLng, centerType)) || "";
-        inferredCity = Boolean(city);
+        const safeLat = Number(locationLat);
+        const safeLng = Number(locationLng);
+        const inferred = await inferCityFromLocation(safeLat, safeLng, centerType);
+
+        if (inferred.city && inferred.distanceKm !== null && inferred.distanceKm <= maxReliableInferenceKm) {
+          city = inferred.city;
+          inferredCity = true;
+        } else {
+          // Cross-check with reverse geocoding when nearest center appears too far/unreliable.
+          const geoCity = await reverseGeocodeCity(safeLat, safeLng);
+          if (geoCity) {
+            city = geoCity;
+            inferredCity = true;
+          } else if (inferred.city) {
+            city = inferred.city;
+            inferredCity = true;
+          }
+        }
       }
     }
 
