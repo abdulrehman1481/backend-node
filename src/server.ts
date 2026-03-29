@@ -80,31 +80,35 @@ function toDate(value: Date | string | null | undefined): string | null {
 
 function serializeLocation(location: unknown): string {
   if (typeof location === "string") return location;
-  return JSON.stringify(location ?? { lat: 0, lng: 0 });
+  return JSON.stringify(location ?? {});
 }
 
-function deserializeLocation(location: unknown): { lat: number; lng: number } {
+function deserializeLocation(location: unknown): { lat: number | null; lng: number | null } {
   if (typeof location === "string") {
     try {
       const parsed = JSON.parse(location) as { lat?: number; lng?: number };
+      const lat = Number(parsed.lat);
+      const lng = Number(parsed.lng);
       return {
-        lat: Number(parsed.lat ?? 0),
-        lng: Number(parsed.lng ?? 0),
+        lat: Number.isFinite(lat) ? lat : null,
+        lng: Number.isFinite(lng) ? lng : null,
       };
     } catch {
-      return { lat: 0, lng: 0 };
+      return { lat: null, lng: null };
     }
   }
 
   if (location && typeof location === "object") {
     const rec = location as Record<string, unknown>;
+    const lat = Number(rec.lat);
+    const lng = Number(rec.lng);
     return {
-      lat: Number(rec.lat ?? 0),
-      lng: Number(rec.lng ?? 0),
+      lat: Number.isFinite(lat) ? lat : null,
+      lng: Number.isFinite(lng) ? lng : null,
     };
   }
 
-  return { lat: 0, lng: 0 };
+  return { lat: null, lng: null };
 }
 
 function parseLatLng(location: unknown): { lat: number | null; lng: number | null } {
@@ -133,7 +137,41 @@ function parseLatLng(location: unknown): { lat: number | null; lng: number | nul
     return { lat: null, lng: null };
   }
 
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return { lat: null, lng: null };
+  }
+
   return { lat, lng };
+}
+
+function isValidNonZeroLocation(lat: number | null, lng: number | null): lat is number {
+  if (lat === null || lng === null) return false;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+  return !(lat === 0 && lng === 0);
+}
+
+function validateLocationPayload(location: { lat: number; lng: number } | undefined): string | null {
+  if (!location) {
+    return "location is required.";
+  }
+
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return "location must include valid numeric lat and lng.";
+  }
+  if (lat < -90 || lat > 90) {
+    return "location.lat must be between -90 and 90.";
+  }
+  if (lng < -180 || lng > 180) {
+    return "location.lng must be between -180 and 180.";
+  }
+  if (lat === 0 && lng === 0) {
+    return "location coordinates cannot be (0, 0).";
+  }
+
+  return null;
 }
 
 function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -269,27 +307,36 @@ function requestWithActionCount(item: Prisma.BloodRequestGetPayload<{ include: {
   };
 }
 
-async function inferCityFromLocation(lat: number, lng: number): Promise<string | null> {
-  const cities = await prisma.medicalCenter.findMany({
-    where: { city: { not: "" } },
-    distinct: ["city"],
-    select: { city: true },
+async function inferCityFromLocation(lat: number, lng: number, centerType?: string): Promise<string | null> {
+  if (!isValidNonZeroLocation(lat, lng)) {
+    return null;
+  }
+
+  const where: Prisma.MedicalCenterWhereInput = { city: { not: "" } };
+  if (centerType && ["HOSPITAL", "LAB", "CLINIC", "BLOOD_BANK"].includes(centerType)) {
+    where.centerType = centerType;
+  }
+
+  const centers = await prisma.medicalCenter.findMany({
+    where,
+    select: {
+      city: true,
+      location: true,
+    },
+    take: 5000,
   });
 
   let bestCity: string | null = null;
   let bestDistance: number | null = null;
 
-  for (const c of cities) {
-    const sample = await prisma.medicalCenter.findFirst({ where: { city: c.city } });
-    if (!sample) continue;
-    const loc = parseLatLng(sample.location);
-    if (loc.lat === null || loc.lng === null) continue;
-    if (loc.lat === 0 && loc.lng === 0) continue;
+  for (const center of centers) {
+    const loc = parseLatLng(center.location);
+    if (!isValidNonZeroLocation(loc.lat, loc.lng)) continue;
 
     const d = distanceKm(lat, lng, loc.lat, loc.lng);
     if (bestDistance === null || d < bestDistance) {
       bestDistance = d;
-      bestCity = c.city;
+      bestCity = center.city;
     }
   }
 
@@ -419,6 +466,12 @@ app.post(
       if (!selectedCenter) {
         return void res.status(400).json({ hospital_center_id: "Selected medical center was not found." });
       }
+      const selectedCenterLoc = parseLatLng(selectedCenter.location);
+      if (!isValidNonZeroLocation(selectedCenterLoc.lat, selectedCenterLoc.lng)) {
+        return void res.status(400).json({
+          hospital_center_id: "Selected hospital does not have a valid location. Please pick another hospital.",
+        });
+      }
     }
 
     let username = normalizedEmail.split("@")[0];
@@ -451,7 +504,7 @@ app.post(
           weightKg: 50,
           gender: "O",
           isAvailable: true,
-          location: serializeLocation({ lat: 0, lng: 0 }),
+          location: serializeLocation({}),
         },
         update: {},
       });
@@ -467,7 +520,7 @@ app.post(
           licenseNumber,
           nodalOfficerName: `${payload.first_name} ${payload.last_name}`.trim() || "Nodal Officer",
           emergencyPhone: normalizedPhone,
-          location: selectedCenter?.location || serializeLocation({ lat: 0, lng: 0 }),
+          location: selectedCenter?.location || serializeLocation({}),
         },
         update: {},
       });
@@ -621,7 +674,7 @@ app.get(
         dateOfBirth: new Date("2000-01-01T00:00:00.000Z"),
         weightKg: 50,
         gender: "O",
-        location: serializeLocation({ lat: 0, lng: 0 }),
+        location: serializeLocation({}),
       },
       update: {},
     });
@@ -663,6 +716,12 @@ app.patch(
     }
 
     const p = parsed.data;
+    if (p.location) {
+      const locationError = validateLocationPayload(p.location);
+      if (locationError) {
+        return void res.status(400).json({ location: locationError });
+      }
+    }
 
     const updated = await prisma.donorProfile.upsert({
       where: { userId: req.user!.id },
@@ -674,7 +733,7 @@ app.patch(
         gender: p.gender ?? "O",
         isAvailable: p.is_available ?? true,
         lastDonationDate: p.last_donation_date ? new Date(p.last_donation_date) : null,
-        location: serializeLocation(p.location || { lat: 0, lng: 0 }),
+        location: serializeLocation(p.location || {}),
       },
       update: {
         ...(p.blood_group ? { bloodGroup: p.blood_group } : {}),
@@ -720,7 +779,7 @@ app.get(
         licenseNumber: `TEMP-${req.user!.id}`,
         nodalOfficerName: "",
         emergencyPhone: user.phoneNumber,
-        location: serializeLocation({ lat: 0, lng: 0 }),
+        location: serializeLocation({}),
       },
       update: {},
     });
@@ -757,6 +816,12 @@ app.patch(
     }
 
     const p = parsed.data;
+    if (p.location) {
+      const locationError = validateLocationPayload(p.location);
+      if (locationError) {
+        return void res.status(400).json({ location: locationError });
+      }
+    }
 
     const profile = await prisma.hospitalProfile.upsert({
       where: { userId: req.user!.id },
@@ -766,7 +831,7 @@ app.patch(
         licenseNumber: p.license_number || `TEMP-${req.user!.id}`,
         nodalOfficerName: p.nodal_officer_name || "",
         emergencyPhone: p.emergency_phone || "",
-        location: serializeLocation(p.location || { lat: 0, lng: 0 }),
+        location: serializeLocation(p.location || {}),
       },
       update: {
         ...(p.facility_name ? { facilityName: p.facility_name } : {}),
@@ -834,10 +899,27 @@ app.get(
       const donorLoc = parseLatLng(donorProfile?.location);
 
       const nearbyIds = new Set<bigint>();
-      if (donorLoc.lat !== null && donorLoc.lng !== null) {
+
+      // Donors can create requests too; always include their own requests in list/history views.
+      const ownRequestIds = await prisma.bloodRequest.findMany({
+        where: includeHistory
+          ? { requesterId: currentUser.id }
+          : {
+              requesterId: currentUser.id,
+              status: { in: ["ACTIVE", "PARTIAL"] },
+              requiredByDatetime: { gte: now },
+            },
+        select: { id: true },
+      });
+
+      for (const item of ownRequestIds) {
+        nearbyIds.add(item.id);
+      }
+
+      if (isValidNonZeroLocation(donorLoc.lat, donorLoc.lng)) {
         for (const item of activeRequests) {
           const reqLoc = parseLatLng(item.location);
-          if (reqLoc.lat === null || reqLoc.lng === null) continue;
+          if (!isValidNonZeroLocation(reqLoc.lat, reqLoc.lng)) continue;
           if (distanceKm(donorLoc.lat, donorLoc.lng, reqLoc.lat, reqLoc.lng) <= cityRadiusKm) {
             nearbyIds.add(item.id);
           }
@@ -930,6 +1012,11 @@ app.post(
     }
 
     const payload = parsed.data;
+    const locationError = validateLocationPayload(payload.location);
+    if (locationError) {
+      return void res.status(400).json({ location: locationError });
+    }
+
     const requiredBy = new Date(payload.required_by_datetime);
     if (requiredBy.getTime() < Date.now()) {
       return void res.status(400).json({ detail: "The required time must be in the future." });
@@ -1217,11 +1304,15 @@ app.get(
         return void res.status(400).json({ detail: "Provide lat/lon or complete your hospital profile location." });
       }
       const loc = parseLatLng(hospital.location);
-      if (loc.lat === null || loc.lng === null) {
-        return void res.status(400).json({ detail: "Hospital profile location must have valid lat/lng." });
+      if (!isValidNonZeroLocation(loc.lat, loc.lng)) {
+        return void res.status(400).json({ detail: "Hospital profile location must have valid non-zero lat/lng." });
       }
       lat = loc.lat;
       lon = loc.lng;
+    }
+
+    if (!isValidNonZeroLocation(lat, lon)) {
+      return void res.status(400).json({ detail: "lat/lon must be valid and cannot be (0,0)." });
     }
 
     const donors = await prisma.donorProfile.findMany({
@@ -1236,7 +1327,7 @@ app.get(
     const rows = donors
       .map((donor) => {
         const loc = parseLatLng(donor.location);
-        if (loc.lat === null || loc.lng === null) return null;
+        if (!isValidNonZeroLocation(loc.lat, loc.lng)) return null;
 
         const eligible = isEligibleToDonate(donor.isAvailable, donor.weightKg, donor.lastDonationDate);
         if (!eligible) return null;
@@ -1733,6 +1824,7 @@ app.get(
     const limit = Math.max(1, Math.min(Number.isFinite(limitRaw) ? limitRaw : 80, 300));
 
     let city = cityQuery;
+    let inferredCity = false;
 
     if (!city) {
       let locationLat = Number.isFinite(userLat) ? userLat : null;
@@ -1752,19 +1844,54 @@ app.get(
         }
       }
 
-      if (locationLat !== null && locationLng !== null) {
-        city = (await inferCityFromLocation(locationLat, locationLng)) || "";
+      if (isValidNonZeroLocation(locationLat, locationLng)) {
+        city = (await inferCityFromLocation(locationLat, locationLng, centerType)) || "";
+        inferredCity = Boolean(city);
       }
     }
 
     const where: Prisma.MedicalCenterWhereInput = {};
-    if (city) where.city = { equals: city };
+    if (city) where.city = { equals: city, mode: "insensitive" };
     if (["HOSPITAL", "LAB", "CLINIC", "BLOOD_BANK"].includes(centerType)) {
       where.centerType = centerType as Prisma.MedicalCenterWhereInput["centerType"];
     }
-    if (q) where.name = { contains: q };
+    if (q) where.name = { contains: q, mode: "insensitive" };
 
-    const centers = await prisma.medicalCenter.findMany({ where, take: limit, orderBy: [{ city: "asc" }, { name: "asc" }] });
+    let centers = await prisma.medicalCenter.findMany({
+      where,
+      take: Math.max(limit * 5, 300),
+      orderBy: [{ city: "asc" }, { name: "asc" }],
+    });
+
+    // Filter out invalid coordinates from discovery lists.
+    centers = centers.filter((center) => {
+      const loc = parseLatLng(center.location);
+      return isValidNonZeroLocation(loc.lat, loc.lng);
+    });
+
+    // If city was inferred and gave no rows, relax city filter but keep type/query filtering.
+    if (inferredCity && centers.length === 0) {
+      const relaxedWhere: Prisma.MedicalCenterWhereInput = {};
+      if (["HOSPITAL", "LAB", "CLINIC", "BLOOD_BANK"].includes(centerType)) {
+        relaxedWhere.centerType = centerType as Prisma.MedicalCenterWhereInput["centerType"];
+      }
+      if (q) {
+        relaxedWhere.name = { contains: q, mode: "insensitive" };
+      }
+
+      centers = await prisma.medicalCenter.findMany({
+        where: relaxedWhere,
+        take: Math.max(limit * 5, 300),
+        orderBy: [{ city: "asc" }, { name: "asc" }],
+      });
+      centers = centers.filter((center) => {
+        const loc = parseLatLng(center.location);
+        return isValidNonZeroLocation(loc.lat, loc.lng);
+      });
+      city = "";
+    }
+
+    centers = centers.slice(0, limit);
 
     const items = centers.map((c) => {
       if (compact) {
