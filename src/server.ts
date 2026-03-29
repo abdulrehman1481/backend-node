@@ -174,6 +174,22 @@ function validateLocationPayload(location: { lat: number; lng: number } | undefi
   return null;
 }
 
+function normalizeCityName(city: string): string {
+  return city
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\b(city|district|division|tehsil|capital|territory|pakistan)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cityNameMatches(candidate: string, expected: string): boolean {
+  const a = normalizeCityName(candidate);
+  const b = normalizeCityName(expected);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
 function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const rad = (deg: number) => (deg * Math.PI) / 180;
   const r = 6371;
@@ -1898,6 +1914,7 @@ app.get(
     const centerType = String(req.query.center_type || "").trim().toUpperCase();
     const q = String(req.query.q || "").trim();
     const compact = ["1", "true", "True"].includes(String(req.query.compact || ""));
+    const strictCityOnly = ["1", "true", "True"].includes(String(req.query.strict_city || ""));
 
     const latRaw = req.query.lat;
     const lngRaw = req.query.lng;
@@ -1942,7 +1959,7 @@ app.get(
           if (geoCity) {
             city = geoCity;
             inferredCity = true;
-          } else if (inferred.city) {
+          } else if (inferred.city && !strictCityOnly) {
             city = inferred.city;
             inferredCity = true;
           }
@@ -1950,8 +1967,12 @@ app.get(
       }
     }
 
+    if (strictCityOnly && !city) {
+      return void res.json({ city: "", count: 0, items: [] });
+    }
+
     const where: Prisma.MedicalCenterWhereInput = {};
-    if (city) where.city = { equals: city, mode: "insensitive" };
+    if (city && !strictCityOnly) where.city = { equals: city, mode: "insensitive" };
     if (["HOSPITAL", "LAB", "CLINIC", "BLOOD_BANK"].includes(centerType)) {
       where.centerType = centerType as Prisma.MedicalCenterWhereInput["centerType"];
     }
@@ -1969,8 +1990,12 @@ app.get(
       return isValidNonZeroLocation(loc.lat, loc.lng);
     });
 
+    if (city && strictCityOnly) {
+      centers = centers.filter((center) => cityNameMatches(center.city, city));
+    }
+
     // If city was inferred and gave no rows, relax city filter but keep type/query filtering.
-    if (inferredCity && centers.length === 0) {
+    if (!strictCityOnly && inferredCity && centers.length === 0) {
       const relaxedWhere: Prisma.MedicalCenterWhereInput = {};
       if (["HOSPITAL", "LAB", "CLINIC", "BLOOD_BANK"].includes(centerType)) {
         relaxedWhere.centerType = centerType as Prisma.MedicalCenterWhereInput["centerType"];
