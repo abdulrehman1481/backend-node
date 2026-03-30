@@ -511,6 +511,16 @@ const registerSchema = z.object({
   phone: z.string().optional(),
   role: z.enum(["DONOR", "HOSPITAL", "ADMIN"]),
   hospital_center_id: z.number().int().positive().optional(),
+  hospital_new: z
+    .object({
+      name: z.string().min(2),
+      city: z.string().optional(),
+      area: z.string().optional(),
+      address: z.string().optional(),
+      contact: z.string().optional(),
+      location: z.object({ lat: z.number(), lng: z.number() }),
+    })
+    .optional(),
 });
 
 app.post(
@@ -541,8 +551,16 @@ app.post(
       return void res.status(400).json({ email: "user with this email already exists." });
     }
 
-    if (payload.role === "HOSPITAL" && !payload.hospital_center_id) {
-      return void res.status(400).json({ hospital_center_id: "Please select your hospital from nearby centers." });
+    if (payload.role === "HOSPITAL" && payload.hospital_center_id && payload.hospital_new) {
+      return void res.status(400).json({
+        hospital_center_id: "Select an existing hospital OR create a new hospital, not both.",
+      });
+    }
+
+    if (payload.role === "HOSPITAL" && !payload.hospital_center_id && !payload.hospital_new) {
+      return void res.status(400).json({
+        hospital_center_id: "Please select your hospital from nearby centers or add a new hospital.",
+      });
     }
 
     let selectedCenter: Prisma.MedicalCenterGetPayload<{}> | null = null;
@@ -557,6 +575,58 @@ app.post(
           hospital_center_id: "Selected hospital does not have a valid location. Please pick another hospital.",
         });
       }
+    }
+
+    if (payload.role === "HOSPITAL" && payload.hospital_new) {
+      const locationError = validateLocationPayload(payload.hospital_new.location);
+      if (locationError) {
+        return void res.status(400).json({ hospital_new: { location: locationError } });
+      }
+
+      const lat = Number(payload.hospital_new.location.lat);
+      const lng = Number(payload.hospital_new.location.lng);
+      const name = payload.hospital_new.name.trim();
+      if (name.length < 2) {
+        return void res.status(400).json({ hospital_new: { name: "Hospital name must be at least 2 characters." } });
+      }
+
+      let city = (payload.hospital_new.city || "").trim();
+      const maxReliableInferenceKm = Number(process.env.CITY_INFERENCE_MAX_DISTANCE_KM || 120);
+
+      if (!city) {
+        const inferred = await inferCityFromLocation(lat, lng, "HOSPITAL");
+        if (inferred.city && inferred.distanceKm !== null && inferred.distanceKm <= maxReliableInferenceKm) {
+          city = inferred.city;
+        } else {
+          const geoCity = await reverseGeocodeCity(lat, lng);
+          if (geoCity) {
+            city = geoCity;
+          } else if (inferred.city) {
+            city = inferred.city;
+          }
+        }
+      }
+
+      if (!city) {
+        return void res.status(400).json({
+          hospital_new: {
+            city: "City is required. Enable location access or provide city manually.",
+          },
+        });
+      }
+
+      selectedCenter = await prisma.medicalCenter.create({
+        data: {
+          name,
+          city,
+          area: (payload.hospital_new.area || "").trim(),
+          address: (payload.hospital_new.address || "").trim(),
+          contact: (payload.hospital_new.contact || normalizedPhone).trim(),
+          centerType: "HOSPITAL",
+          location: serializeLocation({ lat, lng }),
+          source: "hospital_signup",
+        },
+      });
     }
 
     let username = normalizedEmail.split("@")[0];
